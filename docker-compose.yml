@@ -1,0 +1,102 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: parknest-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-parknest_pro}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres123}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infra/docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - parknest-network
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: parknest-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-}
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - parknest-network
+
+  # ParkNest Pro API
+  api:
+    build:
+      context: ./services/api
+      dockerfile: ../../infra/docker/api/Dockerfile
+    container_name: parknest-api
+    restart: unless-stopped
+    environment:
+      NODE_ENV: development
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_NAME: ${POSTGRES_DB:-parknest_pro}
+      DATABASE_USERNAME: ${POSTGRES_USER:-postgres}
+      DATABASE_PASSWORD: ${POSTGRES_PASSWORD:-postgres123}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      JWT_SECRET: ${JWT_SECRET:-your_super_secure_jwt_secret_key_here_min_32_chars}
+      API_PORT: 3000
+      CORS_ORIGIN: http://localhost:8000
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./services/api:/app
+      - /app/node_modules
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - parknest-network
+    command: npm run start:dev
+
+  # ParkNest Pro Admin Panel
+  admin:
+    build:
+      context: ./apps/admin
+      dockerfile: ../../infra/docker/admin/Dockerfile
+    container_name: parknest-admin
+    restart: unless-stopped
+    environment:
+      NODE_ENV: development
+      NEXT_PUBLIC_API_URL: http://localhost:3000/api/v1
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./apps/admin:/app
+      - /app/node_modules
+    depends_on:
+      - api
+    networks:
+      - parknest-network
+    command: npm run dev
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  parknest-network:
+    driver: bridge
+
+# Health check configuration
+x-healthcheck: &healthcheck
+  interval: 30s
+  timeout: 10s
+  retries: 3
+  start_period: 40s
